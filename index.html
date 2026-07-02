@@ -11,11 +11,13 @@
 <meta name="apple-mobile-web-app-title" content="Duty Roster" />
 <meta name="mobile-web-app-capable" content="yes" />
 <meta name="theme-color" content="#F7F4EC" />
+<link rel="manifest" href="./manifest.json" />
 <link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' fill='%2320241F'/%3E%3Ctext x='50' y='62' font-size='42' font-family='Georgia,serif' font-weight='700' fill='%23F7F4EC' text-anchor='middle'%3E2B%3C/text%3E%3C/svg%3E" />
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' fill='%2320241F'/%3E%3Ctext x='50' y='62' font-size='42' font-family='Georgia,serif' font-weight='700' fill='%23F7F4EC' text-anchor='middle'%3E2B%3C/text%3E%3C/svg%3E" />
 
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 
 <style>
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
@@ -51,6 +53,10 @@
   #ownerName {
     font-family: 'Space Grotesk', sans-serif; font-size: 22px; font-weight: 700; color: #20241F;
     border: none; background: transparent; outline: none; padding: 2px 0; width: 100%;
+  }
+  #ownerPhone {
+    font-family: 'Inter', sans-serif; font-size: 13px; font-weight: 500; color: #5B5648;
+    border: none; background: transparent; outline: none; padding: 0; width: 100%;
   }
   #saveStatus { font-size: 11px; color: #2F6F5E; min-height: 14px; }
 
@@ -151,6 +157,8 @@
     background: #20241F; color: #fff; border-radius: 10px; padding: 12px 0; font-size: 14px;
     font-weight: 700; font-family: 'Space Grotesk', sans-serif; margin-top: 4px;
   }
+  .export-confirm-btn.secondary { background: #fff; color: #20241F; border: 1.5px solid #E5E0D3; margin-top: 0; }
+  .export-confirm-btn.whatsapp { background: #25D366; margin-top: 0; }
   .cancel-btn { background: transparent; color: #8A8377; padding: 8px 0; font-size: 13px; font-weight: 600; }
 
   /* Quick fill bar */
@@ -171,6 +179,7 @@
       <button class="export-btn" id="exportOpenBtn">Export</button>
     </div>
     <input id="ownerName" placeholder="Jina lako" />
+    <input id="ownerPhone" placeholder="Namba ya simu (mf. 0742417963)" />
     <div id="saveStatus"></div>
   </div>
 
@@ -214,7 +223,7 @@
       <div class="sheet-label">Comment / Kumbukumbu (mf. special call)</div>
       <textarea id="commentBox" rows="3" placeholder="Andika kumbukumbu hapa..."></textarea>
       <div class="sheet-actions">
-        <button class="save-comment-btn" id="saveCommentBtn">Hifadhi comment</button>
+        <button class="save-comment-btn" id="saveCommentBtn">Hifadhi na Funga</button>
         <button class="clear-btn" id="clearDayBtn">Futa siku hii</button>
       </div>
     </div>
@@ -225,8 +234,10 @@
     <div class="export-sheet">
       <div class="sheet-handle"></div>
       <div class="sheet-date" id="exportTitle"></div>
-      <div class="export-desc">Itapakua faili la CSV (linafunguka na Excel) lenye tarehe zote za mwezi huu, shift, na comments zako. Unaweza kulituma moja kwa moja WhatsApp.</div>
-      <button class="export-confirm-btn" id="exportConfirmBtn">Pakua CSV</button>
+      <div class="export-desc">Chagua aina ya faili unayotaka kupakua. Unaweza pia kutuma moja kwa moja WhatsApp.</div>
+      <button class="export-confirm-btn" id="exportXlsxBtn">📊 Pakua Excel (.xlsx)</button>
+      <button class="export-confirm-btn secondary" id="exportCsvBtn">Pakua CSV</button>
+      <button class="export-confirm-btn whatsapp" id="exportShareBtn">💬 Share kwenye WhatsApp</button>
       <button class="cancel-btn" id="exportCancelBtn">Ghairi</button>
     </div>
   </div>
@@ -289,6 +300,13 @@
   ownerInput.value = localStorage.getItem(NAME_KEY) || "";
   ownerInput.addEventListener("input", function () {
     localStorage.setItem(NAME_KEY, ownerInput.value);
+  });
+
+  var PHONE_KEY = "duty_roster_owner_phone_v1";
+  var phoneInput = document.getElementById("ownerPhone");
+  phoneInput.value = localStorage.getItem(PHONE_KEY) || "";
+  phoneInput.addEventListener("input", function () {
+    localStorage.setItem(PHONE_KEY, phoneInput.value);
   });
 
   function isToday(d) {
@@ -477,12 +495,13 @@
     render();
   }
 
-  function saveComment() {
+  function saveAndClose() {
     var key = dateKey(state.year, state.month, state.selectedDay);
     var existing = state.entries[key];
     var comment = document.getElementById("commentBox").value;
     state.entries[key] = { code: existing ? existing.code : "", comment: comment };
     saveEntries(state.entries);
+    closeDay();
     render();
   }
 
@@ -525,22 +544,29 @@
     render();
   }
 
-  function exportCSV() {
+  function buildRosterRows() {
     var totalDays = daysInMonth(state.year, state.month);
-    var rows = [["Tarehe", "Siku", "Shift", "Maelezo ya Shift", "Comment"]];
+    var rows = [];
     for (var d = 1; d <= totalDays; d++) {
       var key = dateKey(state.year, state.month, d);
       var entry = state.entries[key];
       var wd = new Date(state.year, state.month, d).getDay();
-      rows.push([
-        pad(d) + "/" + pad(state.month + 1) + "/" + state.year,
-        WEEKDAYS_SW[wd],
-        entry && entry.code ? entry.code : "",
-        entry && entry.code && CODE_MAP[entry.code] ? CODE_MAP[entry.code].desc : "",
-        entry && entry.comment ? entry.comment : ""
-      ]);
+      rows.push({
+        date: pad(d) + "/" + pad(state.month + 1) + "/" + state.year,
+        day: WEEKDAYS_SW[wd],
+        code: entry && entry.code ? entry.code : "",
+        desc: entry && entry.code && CODE_MAP[entry.code] ? CODE_MAP[entry.code].desc : "",
+        comment: entry && entry.comment ? entry.comment : ""
+      });
     }
-    var csv = rows.map(function (r) {
+    return rows;
+  }
+
+  function exportCSV() {
+    var rows = buildRosterRows();
+    var out = [["Tarehe", "Siku", "Shift", "Maelezo ya Shift", "Comment"]];
+    rows.forEach(function (r) { out.push([r.date, r.day, r.code, r.desc, r.comment]); });
+    var csv = out.map(function (r) {
       return r.map(function (c) { return '"' + String(c).replace(/"/g, '""') + '"'; }).join(",");
     }).join("\n");
     var bom = "\uFEFF";
@@ -557,6 +583,184 @@
     document.getElementById("exportOverlay").classList.remove("show");
   }
 
+  function buildWorkbookBlob() {
+    var rows = buildRosterRows();
+    var name = ownerInput.value || "Jina la Mtumiaji";
+    var phone = phoneInput.value || "";
+    var monthLabel = MONTH_NAMES_SW[state.month] + " " + state.year;
+
+    var wb = XLSX.utils.book_new();
+    var aoa = [];
+
+    // Heading block
+    aoa.push(["MUHIMBILI ORTHOPAEDIC INSTITUTE (MOI)"]);
+    aoa.push(["WARD 2B DUTY ROSTER"]);
+    aoa.push([name]);
+    if (phone) aoa.push(["Simu: " + phone]);
+    aoa.push(["Mwezi: " + monthLabel]);
+    aoa.push([]); // spacer row
+    var headerRowIndex = aoa.length; // 0-indexed row where column headers sit
+    aoa.push(["Tarehe", "Siku", "Shift", "Maelezo ya Shift", "Comment"]);
+    var dataStartIndex = aoa.length;
+    rows.forEach(function (r) {
+      aoa.push([r.date, r.day, r.code, r.desc, r.comment]);
+    });
+
+    var ws = XLSX.utils.aoa_to_sheet(aoa);
+
+    // Column widths - fit content
+    ws["!cols"] = [
+      { wch: 13 }, // Tarehe
+      { wch: 12 }, // Siku
+      { wch: 9 },  // Shift
+      { wch: 34 }, // Maelezo
+      { wch: 30 }  // Comment
+    ];
+
+    // Merge heading rows across columns A-E
+    ws["!merges"] = [
+      { s: { r: 0, c: 0 }, e: { r: 0, c: 4 } },
+      { s: { r: 1, c: 0 }, e: { r: 1, c: 4 } },
+      { s: { r: 2, c: 0 }, e: { r: 2, c: 4 } },
+    ];
+    var nextMerge = 3;
+    if (phone) { ws["!merges"].push({ s: { r: nextMerge, c: 0 }, e: { r: nextMerge, c: 4 } }); nextMerge++; }
+    ws["!merges"].push({ s: { r: nextMerge, c: 0 }, e: { r: nextMerge, c: 4 } });
+
+    // Styling helper
+    function setCellStyle(addr, style) {
+      if (!ws[addr]) ws[addr] = { t: "s", v: "" };
+      ws[addr].s = style;
+    }
+    var thinBorder = { style: "thin", color: { rgb: "D8D2C4" } };
+    var allBorders = { top: thinBorder, bottom: thinBorder, left: thinBorder, right: thinBorder };
+
+    // Title styles
+    setCellStyle("A1", {
+      font: { bold: true, sz: 15, color: { rgb: "FFFFFF" } },
+      fill: { fgColor: { rgb: "20241F" } },
+      alignment: { horizontal: "center", vertical: "center" }
+    });
+    setCellStyle("A2", {
+      font: { bold: true, sz: 13, color: { rgb: "FFFFFF" } },
+      fill: { fgColor: { rgb: "2F6F5E" } },
+      alignment: { horizontal: "center", vertical: "center" }
+    });
+    setCellStyle("A3", {
+      font: { bold: true, sz: 12, color: { rgb: "20241F" } },
+      fill: { fgColor: { rgb: "E4EEE9" } },
+      alignment: { horizontal: "center", vertical: "center" }
+    });
+    var rowCursor = 3;
+    if (phone) {
+      setCellStyle("A" + (rowCursor + 1), {
+        font: { sz: 11, color: { rgb: "5B5648" } },
+        fill: { fgColor: { rgb: "F7F4EC" } },
+        alignment: { horizontal: "center", vertical: "center" }
+      });
+      rowCursor++;
+    }
+    setCellStyle("A" + (rowCursor + 1), {
+      font: { italic: true, sz: 11, color: { rgb: "5B5648" } },
+      fill: { fgColor: { rgb: "F7F4EC" } },
+      alignment: { horizontal: "center", vertical: "center" }
+    });
+
+    // Column header row styling (header_row is 0-indexed -> +1 for cell address)
+    var colLetters = ["A", "B", "C", "D", "E"];
+    colLetters.forEach(function (col) {
+      setCellStyle(col + (headerRowIndex + 1), {
+        font: { bold: true, sz: 11, color: { rgb: "FFFFFF" } },
+        fill: { fgColor: { rgb: "20241F" } },
+        alignment: { horizontal: "center", vertical: "center" },
+        border: allBorders
+      });
+    });
+
+    // Shift color map for data rows
+    var shiftFill = {
+      "7-5": "DCEEE7",
+      "N": "DCE2F0",
+      "SD": "E9E0F0",
+      "DO": "EDEBE6",
+      "L": "F5DFDA",
+      "PH": "F7E9CE",
+      "DYS": "F2DDE4"
+    };
+
+    rows.forEach(function (r, idx) {
+      var rowNum = dataStartIndex + idx + 1; // 1-indexed for cell address
+      var isWeekend = false;
+      var wdIdx = WEEKDAYS_SW.indexOf(r.day);
+      if (wdIdx === 0 || wdIdx === 6) isWeekend = true;
+      var baseFill = isWeekend ? "F7F4EC" : "FFFFFF";
+
+      colLetters.forEach(function (col, colIdx) {
+        var fill = baseFill;
+        if (col === "C" && r.code && shiftFill[r.code]) fill = shiftFill[r.code];
+        setCellStyle(col + rowNum, {
+          font: { sz: 10.5, bold: col === "C", color: { rgb: "20241F" } },
+          fill: { fgColor: { rgb: fill } },
+          alignment: { horizontal: colIdx === 0 || colIdx === 1 || colIdx === 2 ? "center" : "left", vertical: "center", wrapText: true },
+          border: allBorders
+        });
+      });
+    });
+
+    // Row heights
+    ws["!rows"] = [];
+    ws["!rows"][0] = { hpt: 22 };
+    ws["!rows"][1] = { hpt: 20 };
+    ws["!rows"][2] = { hpt: 18 };
+
+    XLSX.utils.book_append_sheet(wb, ws, "Roster");
+    var wbout = XLSX.write(wb, { bookType: "xlsx", type: "array", cellStyles: true });
+    return new Blob([wbout], { type: "application/octet-stream" });
+  }
+
+  function downloadBlob(blob, filename) {
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  function exportXLSX() {
+    var blob = buildWorkbookBlob();
+    var ownerName = (ownerInput.value || "roster").replace(/\s+/g, "_");
+    downloadBlob(blob, "Duty_Roster_" + ownerName + "_" + MONTH_NAMES_SW[state.month] + "_" + state.year + ".xlsx");
+    document.getElementById("exportOverlay").classList.remove("show");
+  }
+
+  async function shareToWhatsApp() {
+    var blob = buildWorkbookBlob();
+    var ownerName = (ownerInput.value || "roster").replace(/\s+/g, "_");
+    var filename = "Duty_Roster_" + ownerName + "_" + MONTH_NAMES_SW[state.month] + "_" + state.year + ".xlsx";
+    var file = new File([blob], filename, { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      try {
+        await navigator.share({
+          files: [file],
+          title: "Duty Roster " + MONTH_NAMES_SW[state.month] + " " + state.year,
+          text: "Ratiba ya zamu - " + MONTH_NAMES_SW[state.month] + " " + state.year
+        });
+        document.getElementById("exportOverlay").classList.remove("show");
+        return;
+      } catch (e) {
+        // user cancelled or share failed - fall through to download
+      }
+    }
+    // Fallback: just download the file and inform user
+    downloadBlob(blob, filename);
+    alert("Simu yako haitumii 'Share' moja kwa moja. Faili limepakuliwa - unaweza kulituma WhatsApp kwa mkono kutoka Downloads.");
+    document.getElementById("exportOverlay").classList.remove("show");
+  }
+
   // Event bindings
   document.getElementById("prevMonth").addEventListener("click", function () { changeMonth(-1); });
   document.getElementById("nextMonth").addEventListener("click", function () { changeMonth(1); });
@@ -565,7 +769,7 @@
   document.getElementById("daySheetOverlay").addEventListener("click", function (e) {
     if (e.target === this) closeDay();
   });
-  document.getElementById("saveCommentBtn").addEventListener("click", saveComment);
+  document.getElementById("saveCommentBtn").addEventListener("click", saveAndClose);
   document.getElementById("clearDayBtn").addEventListener("click", clearDay);
   document.getElementById("exportOpenBtn").addEventListener("click", function () {
     document.getElementById("exportTitle").textContent = "Export " + MONTH_NAMES_SW[state.month] + " " + state.year;
@@ -577,9 +781,15 @@
   document.getElementById("exportCancelBtn").addEventListener("click", function () {
     document.getElementById("exportOverlay").classList.remove("show");
   });
-  document.getElementById("exportConfirmBtn").addEventListener("click", exportCSV);
+  document.getElementById("exportXlsxBtn").addEventListener("click", exportXLSX);
+  document.getElementById("exportCsvBtn").addEventListener("click", exportCSV);
+  document.getElementById("exportShareBtn").addEventListener("click", shareToWhatsApp);
 
   render();
+
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.register("./sw.js").catch(function () {});
+  }
 })();
 </script>
 </body>
